@@ -1,5 +1,7 @@
-def calculate_matrixes_hard_margin(x, y):
-    n = x.shape[0]
+import numpy as np
+import cvxopt
+
+def calculate_matrixes_hard_margin(x, y, n):
     if len(np.unique(y))!=2:  #Accept only binary problems
         return
     q_matrix = np.array([-1 for i in range(n)]).reshape(n,1).astype(float) #The astype(float) seems to resolve an error with the solver
@@ -13,8 +15,7 @@ def calculate_matrixes_hard_margin(x, y):
     p_matrix = np.multiply(dot_x_matrix, dot_y_matrix).astype(float) #The H matrix
     return p_matrix, q_matrix, G_matrix, h_matrix, A_matrix, b_matrix, y_values
 
-def cvxopt_solve_qp(P, q, G, h, A=None, b=None):
-    n = x.shape[0]
+def cvxopt_solve_qp(P, q, G, h, n, A=None, b=None):
     P = .5 * (P + P.T)  # make sure P is symmetric (solver will not check)
     cvxopt.solvers.options['show_progress'] = False
     args = [cvxopt.matrix(P, (n, n), 'd'), cvxopt.matrix(q, (n,1), 'd')] #Specifying dimensions and 'd' type of matrix seems to solve some problems
@@ -33,8 +34,7 @@ def calculate_w_b(a,x,y):
     b = np.mean(y[S] - np.dot(x[S], w.T)) #Mean value of b for all support vectors
     return w, b, S
 
-def calculate_matrixes_soft_margin(x, y, C):
-    n = x.shape[0]
+def calculate_matrixes_soft_margin(x, y, C, n):
     if len(np.unique(y))!=2:
         return
     q_matrix = np.array([-1 for i in range(n)]).reshape(n,1).astype(float)
@@ -48,8 +48,7 @@ def calculate_matrixes_soft_margin(x, y, C):
     p_matrix = np.multiply(dot_x_matrix, dot_y_matrix).astype(float)
     return p_matrix, q_matrix, G_matrix, h_matrix, A_matrix, b_matrix, y_values
 
-def cvxopt_solve_qp_soft_margin(P, q, G, h, A=None, b=None):
-    n = x.shape[0]
+def cvxopt_solve_qp_soft_margin(P, q, G, h, n, A=None, b=None):
     P = .5 * (P + P.T)  # make sure P is symmetric
     cvxopt.solvers.options['show_progress'] = False
     args = [cvxopt.matrix(P, (n, n), 'd'), cvxopt.matrix(q, (n,1), 'd')]
@@ -107,8 +106,7 @@ def kernelized_dot_product(x1, x2, kernel, d, gamma):
         dot_matrix = rbf_matrix(gamma=gamma, x1=x1, x2=x2)
         return dot_matrix
     
-def calculate_matrixes_soft_margin_kernel(x, y, C, kernel, d, gamma):
-    n = x.shape[0]
+def calculate_matrixes_soft_margin_kernel(x, y, C, kernel, d, gamma, n):
     if len(np.unique(y))!=2:
         return
     q_matrix = np.array([-1 for i in range(n)]).reshape(n,1).astype(float)
@@ -214,16 +212,16 @@ class svm:
         self.neg_class_ = np.unique(y)[0] 
         self.pos_class_ = np.unique(y)[1]
         if self.margin_type == 'Hard' and self.kernel == 'Linear':
-             p_matrix, q_matrix, G_matrix, h_matrix, A_matrix, b_matrix, self.y_values_ = calculate_matrixes_hard_margin(x=x, y=y)
-             self.alphas_matrix_ = cvxopt_solve_qp(P=p_matrix, q=q_matrix, G=G_matrix, h=h_matrix, A=A_matrix, b=b_matrix)
+             p_matrix, q_matrix, G_matrix, h_matrix, A_matrix, b_matrix, self.y_values_ = calculate_matrixes_hard_margin(x=x, y=y, n=self.n_)
+             self.alphas_matrix_ = cvxopt_solve_qp(P=p_matrix, q=q_matrix, G=G_matrix, h=h_matrix, n=self.n_, A=A_matrix, b=b_matrix)
              self.w_, self.b_, self.S_ = calculate_w_b(a=self.alphas_matrix_,x=x,y=self.y_values_.reshape(self.n_))
         elif (self.margin_type == 'Soft') and (self.kernel == 'Linear'):
-            p_matrix, q_matrix, G_matrix, h_matrix, A_matrix, b_matrix, self.y_values_ = calculate_matrixes_soft_margin(x=x, y=y, C=self.C)
-            self.alphas_matrix_ = cvxopt_solve_qp_soft_margin(P=p_matrix, q=q_matrix, G=G_matrix, h=h_matrix, A=A_matrix, b=b_matrix)
+            p_matrix, q_matrix, G_matrix, h_matrix, A_matrix, b_matrix, self.y_values_ = calculate_matrixes_soft_margin(x=x, y=y, C=self.C, n=self.n_)
+            self.alphas_matrix_ = cvxopt_solve_qp_soft_margin(P=p_matrix, q=q_matrix, G=G_matrix, h=h_matrix, n=self.n_, A=A_matrix, b=b_matrix)
             self.w_, self.b_, self.S_, self.ek_support_vectors_ = calculate_w_b_soft_margin(a=self.alphas_matrix_,x=x,y=self.y_values_.reshape(self.n_))
         elif (self.margin_type == 'Soft') and (self.kernel in ['RBF', 'Polynomial']):
-            p_matrix, q_matrix, G_matrix, h_matrix, A_matrix, b_matrix, self.y_values_ = calculate_matrixes_soft_margin_kernel(x=x, y=y, C=self.C, kernel=self.kernel, d=self.d, gamma=self.gamma)
-            self.alphas_matrix_ = cvxopt_solve_qp_soft_margin(P=p_matrix, q=q_matrix, G=G_matrix, h=h_matrix, A=A_matrix, b=b_matrix)
+            p_matrix, q_matrix, G_matrix, h_matrix, A_matrix, b_matrix, self.y_values_ = calculate_matrixes_soft_margin_kernel(x=x, y=y, C=self.C, kernel=self.kernel, d=self.d, gamma=self.gamma, n=self.n_)
+            self.alphas_matrix_ = cvxopt_solve_qp_soft_margin(P=p_matrix, q=q_matrix, G=G_matrix, h=h_matrix, n=self.n_, A=A_matrix, b=b_matrix)
             self.b_ = calculate_b_kernelized(x=x, a=self.alphas_matrix_, kernel=self.kernel, d=self.d, gamma=self.gamma, y=self.y_values_.reshape(self.n_))
         else:
             raise ValueError("Invalid configuration for margin type or kernel.")
@@ -242,4 +240,3 @@ class svm:
             raise ValueError("Invalid configuration for margin type or kernel.")
 
 
-    
