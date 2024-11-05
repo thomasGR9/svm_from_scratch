@@ -136,13 +136,23 @@ def make_preds_linear_forclass(x, w, b, neg_class, pos_class):
     return y_preds
 
 
-def make_preds_soft_margin_kernel_forclass(x_all, x_pred, a, kernel, d, gamma, b, y_val, neg_class, pos_class, S):
+def rbf_pred_func(x_supp_vect, x_test, gamma):
+    row = []
+    for i in range(x_supp_vect.shape[0]):  
+        row.append(rbf_kernel(gamma=gamma, x_one=x_supp_vect[i], x_two=x_test))
+    final_row = np.array(row) 
+    return final_row
+    
+
+def make_preds_soft_margin_kernel_forclass(x_support_vect, x_pred, a, kernel, d, gamma, b, y_val, neg_class, pos_class, S):
     predictions = []
     try: #again used only when we want to predict only one instance (in inference)
         x_pred.shape[1]
     except IndexError:
         aiyi = y_val[S]*a[S]
-        kernelized_xixtesti = kernelized_dot_product(x1=x_all[S], x2=x_pred, kernel=kernel, d=d, gamma=gamma)
+        if kernel == "RBF":
+            kernelized_xixtesti = rbf_pred_func(x_supp_vect=x_support_vect, x_test=x_pred[i], gamma=gamma)
+        kernelized_xixtesti = kernelized_dot_product(x1=x_support_vect, x2=x_pred, kernel=kernel, d=d, gamma=gamma)
         sum_for_every_sup_vector = np.sum(aiyi*kernelized_xixtesti)
         decision = sum_for_every_sup_vector+b
         if decision<0:
@@ -153,7 +163,10 @@ def make_preds_soft_margin_kernel_forclass(x_all, x_pred, a, kernel, d, gamma, b
         
     for i in range(x_pred.shape[0]):  #predictions for a list of test instances, again using the kernel trick.Note that we dont compute w!
         aiyi = y_val[S]*a[S]
-        kernelized_xixtesti = kernelized_dot_product(x1=x_all[S], x2=x_pred[i], kernel=kernel, d=d, gamma=gamma)
+        if kernel == "RBF":
+            kernelized_xixtesti = rbf_pred_func(x_supp_vect=x_support_vect, x_test=x_pred[i], gamma=gamma)
+        else:
+            kernelized_xixtesti = kernelized_dot_product(x1=x_support_vect, x2=x_pred[i], kernel=kernel, d=d, gamma=gamma)
         sum_for_every_sup_vector = np.sum(aiyi*kernelized_xixtesti)
         decision = sum_for_every_sup_vector+b
         if decision<0:
@@ -178,9 +191,16 @@ class svm:
             raise ValueError("d must be d>=2.")
         
         
-
+        if str(margin_type) == "Soft" and (C==None):
+            raise ValueError("Set C")
+        if (str(kernel) == "RBF") and (gamma==None):
+            raise ValueError("Set gamma")
+        if (str(kernel) == "Polynomial") and (d==None):
+            raise ValueError("Set d")
+        
         if str(margin_type) == 'Hard' and str(kernel) != 'Linear':
             raise ValueError("margin_type : 'Hard' only supported with kernel: 'Linear'")
+
         
         
         
@@ -192,8 +212,8 @@ class svm:
         self.d = d
 
         #Atributes learned after fit
+        self.x_support_vectors_ = None
         self.n_ = None
-        self.x_all_ = None
         self.y_values_ = None
         self.support_vectors_ = None
         self.alphas_matrix_ = None
@@ -208,21 +228,24 @@ class svm:
 
     def fit(self, x, y):
         self.n_ = x.shape[0]
-        self.x_all_ = x
         self.neg_class_ = np.unique(y)[0] 
         self.pos_class_ = np.unique(y)[1]
         if self.margin_type == 'Hard' and self.kernel == 'Linear':
              p_matrix, q_matrix, G_matrix, h_matrix, A_matrix, b_matrix, self.y_values_ = calculate_matrixes_hard_margin(x=x, y=y, n=self.n_)
              self.alphas_matrix_ = cvxopt_solve_qp(P=p_matrix, q=q_matrix, G=G_matrix, h=h_matrix, n=self.n_, A=A_matrix, b=b_matrix)
              self.w_, self.b_, self.S_ = calculate_w_b(a=self.alphas_matrix_,x=x,y=self.y_values_.reshape(self.n_))
+             self.x_support_vectors_ = x[self.S_]
         elif (self.margin_type == 'Soft') and (self.kernel == 'Linear'):
             p_matrix, q_matrix, G_matrix, h_matrix, A_matrix, b_matrix, self.y_values_ = calculate_matrixes_soft_margin(x=x, y=y, C=self.C, n=self.n_)
             self.alphas_matrix_ = cvxopt_solve_qp_soft_margin(P=p_matrix, q=q_matrix, G=G_matrix, h=h_matrix, n=self.n_, A=A_matrix, b=b_matrix)
             self.w_, self.b_, self.S_, self.ek_support_vectors_ = calculate_w_b_soft_margin(a=self.alphas_matrix_,x=x,y=self.y_values_.reshape(self.n_))
+            self.x_support_vectors_ = x[self.S_]
         elif (self.margin_type == 'Soft') and (self.kernel in ['RBF', 'Polynomial']):
             p_matrix, q_matrix, G_matrix, h_matrix, A_matrix, b_matrix, self.y_values_ = calculate_matrixes_soft_margin_kernel(x=x, y=y, C=self.C, kernel=self.kernel, d=self.d, gamma=self.gamma, n=self.n_)
             self.alphas_matrix_ = cvxopt_solve_qp_soft_margin(P=p_matrix, q=q_matrix, G=G_matrix, h=h_matrix, n=self.n_, A=A_matrix, b=b_matrix)
+            self.S_ = (self.alphas_matrix_ > 1e-5).flatten()
             self.b_ = calculate_b_kernelized(x=x, a=self.alphas_matrix_, kernel=self.kernel, d=self.d, gamma=self.gamma, y=self.y_values_.reshape(self.n_))
+            self.x_support_vectors_ = x[self.S_]
         else:
             raise ValueError("Invalid configuration for margin type or kernel.")
 
@@ -234,7 +257,7 @@ class svm:
             y_preds = make_preds_linear_forclass(x=x_test, w=self.w_, b=self.b_, neg_class=self.neg_class_, pos_class=self.pos_class_)
             return y_preds
         elif (self.margin_type == 'Soft') and (self.kernel in ['RBF', 'Polynomial']):
-            y_preds = make_preds_soft_margin_kernel_forclass(x_all=self.x_all_, x_pred=x_test, a=self.alphas_matrix_, kernel=self.kernel, d=self.d, gamma=self.gamma, b=self.b_, y_val=self.y_values_, neg_class=self.neg_class_, pos_class=self.pos_class_, S=self.S_)
+            y_preds = make_preds_soft_margin_kernel_forclass(x_support_vect=self.x_support_vectors_, x_pred=x_test, a=self.alphas_matrix_, kernel=self.kernel, d=self.d, gamma=self.gamma, b=self.b_, y_val=self.y_values_.reshape(self.n_), neg_class=self.neg_class_, pos_class=self.pos_class_, S=self.S_)
             return y_preds
         else:
             raise ValueError("Invalid configuration for margin type or kernel.")
