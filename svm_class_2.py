@@ -5,20 +5,25 @@ from collections import Counter #Used for calculating the most frequent predicte
 from cvxopt import solvers, matrix, spmatrix
 import joblib #Used for storing binary svms in disk if you have memory problems
 import os #For deleting the joblib files that contain the binary svms
-import scipy.sparse as sp
+import scipy.sparse as sp #To define a sparse matrix
+
+
+#Hard Margin
 
 def calculate_matrixes_hard_margin(x, y, n):
-    if len(np.unique(y))!=2:  #Accept only binary problems
-        return
-    q_matrix = np.array([-1 for i in range(n)]).reshape(n,1).astype(float) #The astype(float) seems to resolve an error with the solver
-    G_matrix = np.multiply(np.identity(n), -1).astype(float)
-    h_matrix = np.array([0 for i in range(n)]).astype(float)
-    y_values = np.array([-1 if value==np.unique(y)[0] else 1 for value in y]).reshape((1,n)) #make the two classes -1 and 1 for the needs of the problem
-    A_matrix = np.array([-1 if value==np.unique(y)[0] else 1 for value in y]).astype(float)
+    if len(np.unique(y))!=2:
+        raise ValueError("Not binary.")
+    unique_y = np.unique(y)
+    class_0 = unique_y[0]
+    q_matrix = np.full((n, 1), -1.0, dtype=float) #(n, 1) matrix full of -1
+    G_matrix = -np.eye(n, dtype=float)
+    h_matrix = np.zeros(n, dtype=float)
+    y_values = np.where(y == class_0, -1, 1).reshape(1, n) #(1, n) matrix with -1 if y=class_0 and 1 if y=class_1
+    A_matrix = np.where(y == class_0, -1, 1).astype(float) #(n,) matrix with -1 if y=class_0 and 1 if y=class_1
     b_matrix = 0.0
-    dot_x_matrix = np.dot(x, np.transpose(x))
-    dot_y_matrix = np.dot(np.transpose(y_values), y_values)
-    p_matrix = np.multiply(dot_x_matrix, dot_y_matrix).astype(float) #The H matrix
+    dot_x_matrix = np.dot(x, x.T)
+    dot_y_matrix = np.dot(y_values.T, y_values)
+    p_matrix = np.multiply(dot_x_matrix, dot_y_matrix).astype(float)
     return p_matrix, q_matrix, G_matrix, h_matrix, A_matrix, b_matrix, y_values
 
 def cvxopt_solve_qp(P, q, G, h, n, A=None, b=None):
@@ -34,23 +39,28 @@ def cvxopt_solve_qp(P, q, G, h, n, A=None, b=None):
     return np.array(sol['x']).reshape((P.shape[1],))  #return the matrix with the values of ai's
 
 def calculate_w_b(a,x,y):
-    w = np.dot((y*a).T, x)
-    S = (a > 1e-5).flatten() #criterion to set the support vectors.If the alpha value is greater than 1e-5.
+    try:
+        S = (a > 1e-5).flatten() #criterion to set the support vectors.If the alpha value is greater than 1e-5.
+    except TypeError:
+        raise ValueError("Could not find hyperplane for hard margin")
+    w = np.dot((y[S]*a[S]).T, x[S])
     b = np.mean(y[S] - np.dot(x[S], w.T)) #Mean value of b for all support vectors
     return w, b
+
+#Soft Margin
 
 def calculate_matrixes_soft_margin(x, y, C, n):
     if len(np.unique(y))!=2:
         raise ValueError("Not binary.")
     unique_y = np.unique(y)
     class_0 = unique_y[0]
-    q_matrix = np.full((n, 1), -1.0, dtype=float)
-    negative_identity = -sp.identity(n, format='csr')
+    q_matrix = np.full((n, 1), -1.0, dtype=float) #(n, 1) matrix full of -1
+    negative_identity = -sp.identity(n, format='csr') 
     positive_identity = sp.identity(n, format='csr')
-    G_matrix = sp.vstack([negative_identity, positive_identity])  #(2n,n) matrix, is like having two identity matrixes ,one with -1 and one with 1, with the first on top of the second
+    G_matrix = sp.vstack([negative_identity, positive_identity])  #(2n,n) sparse matrix, is like having two identity matrixes ,one with -1 and one with 1, with the first on top of the second
     h_matrix = np.concatenate([np.zeros(n), np.full(n, C)], axis=0).astype(float) #(2n, 1) matrix with the value 0 for [0,n] and C for [n,2n]
-    y_values = np.where(y == class_0, -1, 1).reshape(1, n)
-    A_matrix = np.where(y == class_0, -1, 1).astype(float)
+    y_values = np.where(y == class_0, -1, 1).reshape(1, n) #(1, n) matrix with -1 if y=class_0 and 1 if y=class_1
+    A_matrix = np.where(y == class_0, -1, 1).astype(float) #(n,) matrix with -1 if y=class_0 and 1 if y=class_1
     b_matrix = 0.0
     dot_x_matrix = np.dot(x, x.T)
     dot_y_matrix = np.dot(y_values.T, y_values)
@@ -58,6 +68,7 @@ def calculate_matrixes_soft_margin(x, y, C, n):
     return p_matrix, q_matrix, G_matrix, h_matrix, A_matrix, b_matrix, y_values
 
 def scipy_sparse_to_spmatrix(A):
+    #Function to convert the scipy sparse matrix to a format compatible with cvxopt.
     coo = A.tocoo()
     SP = cvxopt.spmatrix(coo.data.tolist(), coo.row.tolist(), coo.col.tolist(), size=A.shape)
     return SP
@@ -79,7 +90,12 @@ def calculate_w_b_soft_margin(a,x,y):
     b = np.mean(y[S] - np.dot(x[S], w.T))
     return w, b
 
+def make_preds_linear_forclass(x, w, b, neg_class, pos_class): 
+    y_preds = np.where(np.dot(x, w.T) + b < 0, neg_class, pos_class) 
+    return y_preds
 
+
+#Soft Margin with Kernels
 
 def rbf_matrix_fit(x, gamma):
     #This will split the matrix (of shape (x,x)) on 9 blocks and calculate the rbf kernel for the 6 lower half blocks with iterations.
@@ -144,9 +160,7 @@ def calculate_b_kernelized(x, kernel, d, gamma, aiyi, y):
     b = np.mean(bi) 
     return b
     
-def make_preds_linear_forclass(x, w, b, neg_class, pos_class): 
-    y_preds = np.where(np.dot(x, w.T) + b < 0, neg_class, pos_class) 
-    return y_preds
+
 
 
 def rbf_pred_func(x_supp_vect, x_test, gamma):
@@ -186,7 +200,7 @@ def make_preds_soft_margin_kernel_forclass(x_support_vect, x_pred, kernel, d, ga
 
 
 
-class svm:
+class svm:   #Binary SVM
     def __init__(self, margin_type="Soft", C=None, kernel=None, gamma=None, d=None):
         
         self.margin_type = margin_type
@@ -196,12 +210,12 @@ class svm:
         self.d = d
 
         #Atributes learned after fit
-        self.x_support_vectors_ = None
-        self.aiyi_ = None
-        self.w_ = None
-        self.b_ = None
+        self.x_support_vectors_ = None #Will store the support vectors on 'RBF', and 'Polynomial' kernels to make predictions
+        self.aiyi_ = None #Multiplication of every support vector ai with its corresponding class yi (-1 or 1)
+        self.w_ = None 
+        self.b_ = None #Will use w, b in the linear kernel for predictions
         self.neg_class_ = None
-        self.pos_class_ = None
+        self.pos_class_ = None  #Names of the two classes
         
         
 
@@ -212,9 +226,9 @@ class svm:
         self.neg_class_ = np.unique(y)[0] 
         self.pos_class_ = np.unique(y)[1]
         if self.margin_type == 'Hard' and self.kernel == 'Linear':
-             p_matrix, q_matrix, G_matrix, h_matrix, A_matrix, b_matrix, self.y_values_ = calculate_matrixes_hard_margin(x=x, y=y, n=n)
-             self.alphas_matrix_ = cvxopt_solve_qp(P=p_matrix, q=q_matrix, G=G_matrix, h=h_matrix, n=n, A=A_matrix, b=b_matrix)
-             self.w_, self.b_ = calculate_w_b(a=self.alphas_matrix_,x=x,y=self.y_values_.reshape(n))
+             p_matrix, q_matrix, G_matrix, h_matrix, A_matrix, b_matrix, y_values_ = calculate_matrixes_hard_margin(x=x, y=y, n=n)
+             alphas_matrix_ = cvxopt_solve_qp(P=p_matrix, q=q_matrix, G=G_matrix, h=h_matrix, n=n, A=A_matrix, b=b_matrix)
+             self.w_, self.b_ = calculate_w_b(a=alphas_matrix_,x=x,y=y_values_.reshape(n))
         elif (self.margin_type == 'Soft') and (self.kernel == 'Linear'):
             p_matrix, q_matrix, G_matrix, h_matrix, A_matrix, b_matrix, y_values_ = calculate_matrixes_soft_margin(x=x, y=y, C=self.C, n=n)
             alphas_matrix_ = cvxopt_solve_qp_soft_margin(P=p_matrix, q=q_matrix, G=G_matrix, h=h_matrix, n=n, A=A_matrix, b=b_matrix)
@@ -222,7 +236,7 @@ class svm:
         elif (self.margin_type == 'Soft') and (self.kernel in ['RBF', 'Polynomial']):
             p_matrix, q_matrix, G_matrix, h_matrix, A_matrix, b_matrix, y_values_ = calculate_matrixes_soft_margin_kernel(x=x, y=y, C=self.C, kernel=self.kernel, d=self.d, gamma=self.gamma, n=n)
             alphas_matrix_ = cvxopt_solve_qp_soft_margin(P=p_matrix, q=q_matrix, G=G_matrix, h=h_matrix, n=n, A=A_matrix, b=b_matrix)
-            S = (alphas_matrix_ > 1e-5).flatten()
+            S = (alphas_matrix_ > 1e-5).flatten() #Criterion to set support vectors.
             self.x_support_vectors_ = x[S]
             yi = y_values_.flatten()[S]
             self.aiyi_ = alphas_matrix_[S]*yi
@@ -254,8 +268,9 @@ class svm:
         }
         
         
-class OvOSVM:
+class OvOSVM:  #It uses the Binary svm class to do One VS One strategy for predictions
     def __init__(self, margin_type="Soft", C=None, kernel=None, gamma=None, d=None, MemoryProblem=False):
+        #When MemoryProblem=True it saves every fitted binary svm to the disk (instead of the class), and loads them for predictions. Also it splits the test data into 5 batches to reduce peak memory consumption
         
         if margin_type not in ["Hard", "Soft"]:
             raise ValueError("margin_type must be a str with values ('Hard' or 'Soft')")
@@ -287,11 +302,11 @@ class OvOSVM:
         self.MemoryProblem = MemoryProblem
         
         #Learned after fit
-        self.classifiers = {}  # Dictionary to store the SVMs for each pair of classes 
-        self.pairs_ = None
+        self.classifiers = {}  # Dictionary to store the SVMs for each pair of classes. If MemoryProblem=False it stores the svm object as a whole. If it is true it stores the path to the saved binary svm in the disk
+        self.pairs_ = None #List of all the unique combinations of the classes.
         self.number_of_classes = None
-        self.class_to_index = None
-        self.classes_ = None
+        self.class_to_index = None #Mapping of the classes to numbers 0, 1, 2, ... in the order that np.unique(y) returns
+        self.classes_ = None #Names of the classes
     
     def fit(self, X, y):
         self.classes_ = np.unique(y)
